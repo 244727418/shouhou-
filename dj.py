@@ -19,8 +19,6 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import xlrd  # 用于支持 .xls 文件，需要安装 xlrd
 
-# 导入superqt搜索下拉框组件
-from superqt import QSearchableComboBox
 
 # 自定义多选下拉框组件（基于复选框）
 class MultiSelectComboBox(QWidget):
@@ -849,6 +847,15 @@ class RefundManager(QMainWindow):
         self.highlighted_orders = set()  # 刚导入需要高亮的订单号集合
         self.selected_reasons = set()  # 多选退款原因集合
         self.store_settings = {}  # 店铺基本信息设置
+        
+        # 性能优化：初始化定时器（避免重复创建）
+        self._search_timer = QTimer()
+        self._search_timer.setSingleShot(True)
+        
+        # 性能优化：数据缓存
+        self._cached_records = None  # 缓存搜索结果
+        self._last_search_params = None  # 上次搜索参数
+        
         self.init_ui()
         # 初始化店铺设置
         self.load_store_settings()
@@ -2426,15 +2433,23 @@ class RefundManager(QMainWindow):
 
     def load_table_data(self):
         """加载表格数据（根据筛选条件）"""
+        # 性能优化：缓存检查 - 如果搜索参数相同且数据已缓存，直接使用缓存
+        current_params = self._get_current_search_params()
+        if self._last_search_params == current_params and self._cached_records is not None:
+            records = self._cached_records
+        else:
+            # 需要重新查询数据库
+            records = self.get_filtered_records()
+            # 性能优化：缓存搜索结果
+            self._cached_records = records
+            self._last_search_params = current_params
+        
         # 在加载数据时暂时断开cellChanged信号，防止误触发
         try:
             self.table.cellChanged.disconnect(self.on_cell_changed)
         except TypeError:
             # 如果信号还没有连接，忽略错误
             pass
-        
-        # 使用get_filtered_records方法获取筛选后的记录
-        records = self.get_filtered_records()
         
         # 获取筛选参数用于调试标签
         order_no = self.search_order_edit.text()
@@ -2446,103 +2461,111 @@ class RefundManager(QMainWindow):
         # 更新调试标签显示当前筛选结果
         self.update_debug_label(len(records), order_no, reason, store_name)
 
-        self.table.setRowCount(len(records))
+        # 性能优化：增量更新 - 只更新变化的行
+        current_row_count = self.table.rowCount()
+        new_row_count = len(records)
+        
+        # 设置新的行数
+        if new_row_count != current_row_count:
+            self.table.setRowCount(new_row_count)
+        
+        # 性能优化：批量更新表格数据
         for row, rec in enumerate(records):
             # 获取店铺颜色
             store_color = self.db.get_store_color(rec['store_name'])
             
-            # 店铺名称
-            store_item = QTableWidgetItem(rec['store_name'])
-            if store_color:
-                store_item.setBackground(QColor(store_color))
-            self.table.setItem(row, 0, store_item)
-            
-            # 订单号
-            order_item = QTableWidgetItem(rec['order_no'])
-            if store_color:
-                order_item.setBackground(QColor(store_color))
-            self.table.setItem(row, 1, order_item)
-            
-            # 退款原因
-            reason_item = QTableWidgetItem(rec['reason'])
-            if store_color:
-                reason_item.setBackground(QColor(store_color))
-            self.table.setItem(row, 2, reason_item)
-            
-            # 退款金额
-            amount_item = QTableWidgetItem(f"¥{rec['refund_amount']:.2f}")
-            amount_item.setTextAlignment(Qt.AlignCenter)
-            if store_color:
-                amount_item.setBackground(QColor(store_color))
-            self.table.setItem(row, 3, amount_item)
-            
-            # 撤销
-            cancel_text = "是" if rec['cancel'] else "否"
-            cancel_item = QTableWidgetItem(cancel_text)
-            cancel_item.setForeground(QColor("green") if rec['cancel'] else QColor("red"))
-            cancel_item.setTextAlignment(Qt.AlignCenter)
-            if store_color:
-                cancel_item.setBackground(QColor(store_color))
-            self.table.setItem(row, 4, cancel_item)
-            
-            # 打款补偿
-            comp_text = "是" if rec['compensate'] else "否"
-            comp_item = QTableWidgetItem(comp_text)
-            comp_item.setForeground(QColor("green") if rec['compensate'] else QColor("red"))
-            comp_item.setTextAlignment(Qt.AlignCenter)
-            if store_color:
-                comp_item.setBackground(QColor(store_color))
-            self.table.setItem(row, 5, comp_item)
-            
-            # 补偿金额
-            comp_amount_item = QTableWidgetItem(f"¥{rec['comp_amount']:.2f}")
-            comp_amount_item.setTextAlignment(Qt.AlignCenter)
-            if store_color:
-                comp_amount_item.setBackground(QColor(store_color))
-            self.table.setItem(row, 6, comp_amount_item)
-            
-            # 驳回
-            reject_text = "是" if rec['reject'] else "否"
-            reject_item = QTableWidgetItem(reject_text)
-            reject_item.setForeground(QColor("green") if rec['reject'] else QColor("red"))
-            reject_item.setTextAlignment(Qt.AlignCenter)
-            if store_color:
-                reject_item.setBackground(QColor(store_color))
-            self.table.setItem(row, 7, reject_item)
-            
-            # 驳回结果
-            reject_result_item = QTableWidgetItem(rec['reject_result'])
-            reject_result_item.setTextAlignment(Qt.AlignCenter)
-            if store_color:
-                reject_result_item.setBackground(QColor(store_color))
-            self.table.setItem(row, 8, reject_result_item)
-            
-            # 登记日期
-            date_item = QTableWidgetItem(rec['record_date'])
-            if store_color:
-                date_item.setBackground(QColor(store_color))
-            self.table.setItem(row, 9, date_item)
-            
-            # 备注
-            notes_item = QTableWidgetItem(rec['notes'])
-            if store_color:
-                notes_item.setBackground(QColor(store_color))
-            self.table.setItem(row, 10, notes_item)
+            # 性能优化：检查是否需要更新该行
+            if self._should_update_row(row, rec):
+                # 店铺名称
+                store_item = QTableWidgetItem(rec['store_name'])
+                if store_color:
+                    store_item.setBackground(QColor(store_color))
+                self.table.setItem(row, 0, store_item)
+                
+                # 订单号
+                order_item = QTableWidgetItem(rec['order_no'])
+                if store_color:
+                    order_item.setBackground(QColor(store_color))
+                self.table.setItem(row, 1, order_item)
+                
+                # 退款原因
+                reason_item = QTableWidgetItem(rec['reason'])
+                if store_color:
+                    reason_item.setBackground(QColor(store_color))
+                self.table.setItem(row, 2, reason_item)
+                
+                # 退款金额
+                amount_item = QTableWidgetItem(f"¥{rec['refund_amount']:.2f}")
+                amount_item.setTextAlignment(Qt.AlignCenter)
+                if store_color:
+                    amount_item.setBackground(QColor(store_color))
+                self.table.setItem(row, 3, amount_item)
+                
+                # 撤销
+                cancel_text = "是" if rec['cancel'] else "否"
+                cancel_item = QTableWidgetItem(cancel_text)
+                cancel_item.setForeground(QColor("green") if rec['cancel'] else QColor("red"))
+                cancel_item.setTextAlignment(Qt.AlignCenter)
+                if store_color:
+                    cancel_item.setBackground(QColor(store_color))
+                self.table.setItem(row, 4, cancel_item)
+                
+                # 打款补偿
+                comp_text = "是" if rec['compensate'] else "否"
+                comp_item = QTableWidgetItem(comp_text)
+                comp_item.setForeground(QColor("green") if rec['compensate'] else QColor("red"))
+                comp_item.setTextAlignment(Qt.AlignCenter)
+                if store_color:
+                    comp_item.setBackground(QColor(store_color))
+                self.table.setItem(row, 5, comp_item)
+                
+                # 补偿金额
+                comp_amount_item = QTableWidgetItem(f"¥{rec['comp_amount']:.2f}")
+                comp_amount_item.setTextAlignment(Qt.AlignCenter)
+                if store_color:
+                    comp_amount_item.setBackground(QColor(store_color))
+                self.table.setItem(row, 6, comp_amount_item)
+                
+                # 驳回
+                reject_text = "是" if rec['reject'] else "否"
+                reject_item = QTableWidgetItem(reject_text)
+                reject_item.setForeground(QColor("green") if rec['reject'] else QColor("red"))
+                reject_item.setTextAlignment(Qt.AlignCenter)
+                if store_color:
+                    reject_item.setBackground(QColor(store_color))
+                self.table.setItem(row, 7, reject_item)
+                
+                # 驳回结果
+                reject_result_item = QTableWidgetItem(rec['reject_result'])
+                reject_result_item.setTextAlignment(Qt.AlignCenter)
+                if store_color:
+                    reject_result_item.setBackground(QColor(store_color))
+                self.table.setItem(row, 8, reject_result_item)
+                
+                # 登记日期
+                date_item = QTableWidgetItem(rec['record_date'])
+                if store_color:
+                    date_item.setBackground(QColor(store_color))
+                self.table.setItem(row, 9, date_item)
+                
+                # 备注
+                notes_item = QTableWidgetItem(rec['notes'])
+                if store_color:
+                    notes_item.setBackground(QColor(store_color))
+                self.table.setItem(row, 10, notes_item)
 
             # 高亮刚导入的订单（覆盖店铺颜色）
             if rec['order_no'] in self.highlighted_orders:
                 for col in range(11):
-                    self.table.item(row, col).setBackground(QColor("#FFD700"))  # 金色高亮
+                    if self.table.item(row, col):
+                        self.table.item(row, col).setBackground(QColor("#FFD700"))  # 金色高亮
         
         # 数据加载完成后重新连接cellChanged信号
         self.table.cellChanged.connect(self.on_cell_changed)
         
-        # 更新状态栏统计
-        self.update_statusbar(records)
-        # 更新左下角总金额显示
-        self.update_total_amount_display()
-        # 更新店铺统计信息显示
-        self.update_store_stats_display()
+        # 性能优化：合并统计更新，避免重复计算
+        self._update_all_statistics(records)
+        
         # 清除高亮标记（高亮持续到下次加载，但我们保留一个标记，下次加载时会重新根据集合高亮，直到用户点击表格）
         # 注意：用户点击表格时清除高亮，通过table的itemClicked信号实现
 
@@ -2569,19 +2592,61 @@ class RefundManager(QMainWindow):
 
     def on_search_changed(self):
         """搜索条件变化时自动搜索（实时搜索）"""
-        # 避免频繁刷新，延迟一点
-        if hasattr(self, '_search_timer'):
-            self._search_timer.stop()
-        self._search_timer = QTimer()
-        self._search_timer.setSingleShot(True)
+        # 性能优化：复用已有的定时器，避免重复创建
+        self._search_timer.stop()
         
         def update_data():
+            # 性能优化：合并数据库查询，一次搜索获取所有数据
             self.load_table_data()
-            # 同时更新店铺统计信息显示
-            self.update_store_stats_display()
+            # 不再单独调用 update_store_stats_display()，因为 load_table_data() 中已经包含统计更新
         
+        # 性能优化：确保定时器连接正确
+        try:
+            self._search_timer.timeout.disconnect()
+        except:
+            pass
         self._search_timer.timeout.connect(update_data)
-        self._search_timer.start(300)
+        self._search_timer.start(800)
+
+    def _get_current_search_params(self):
+        """获取当前搜索参数（用于缓存检查）"""
+        return (
+            self.search_order_edit.text(),
+            tuple(self.search_reason_combo.checkedItems()),
+            self.search_cancel_combo.currentText(),
+            self.search_compensate_combo.currentText(),
+            self.search_reject_combo.currentText(),
+            self.search_reject_result_combo.currentText(),
+            self.search_store_combo.currentText(),
+            self.start_date_edit.date().toString("yyyy-MM-dd"),
+            self.end_date_edit.date().toString("yyyy-MM-dd")
+        )
+
+    def _should_update_row(self, row, record):
+        """检查是否需要更新指定行（增量更新优化）"""
+        # 如果行数变化，需要更新所有行
+        if row >= self.table.rowCount():
+            return True
+        
+        # 检查当前行数据是否与记录匹配
+        current_store = self.table.item(row, 0).text() if self.table.item(row, 0) else ""
+        current_order = self.table.item(row, 1).text() if self.table.item(row, 1) else ""
+        
+        # 如果店铺名称或订单号不匹配，需要更新
+        if current_store != record['store_name'] or current_order != record['order_no']:
+            return True
+        
+        # 其他列的数据变化检查（可选，为了性能可以省略）
+        return False
+
+    def _update_all_statistics(self, records):
+        """合并更新所有统计信息（避免重复计算）"""
+        # 更新状态栏统计
+        self.update_statusbar(records)
+        # 更新左下角总金额显示
+        self.update_total_amount_display()
+        # 更新店铺统计信息显示
+        self.update_store_stats_display()
 
     def reset_search(self):
         """重置搜索条件"""

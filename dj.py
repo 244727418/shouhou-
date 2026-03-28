@@ -615,7 +615,7 @@ class Database:
         """获取店铺设置"""
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT daily_orders, daily_sales, refund_budget 
+            SELECT daily_orders, daily_sales, refund_budget
             FROM stores WHERE id = ?
         ''', (store_id,))
         result = cursor.fetchone()
@@ -626,6 +626,31 @@ class Database:
                 'refund_budget': result[2]
             }
         return None
+
+    def delete_store(self, store_id):
+        """删除店铺及其相关数据（由于外键约束，相关记录会自动删除）"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('DELETE FROM stores WHERE id = ?', (store_id,))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"删除店铺失败: {e}")
+            return False
+
+    def update_store_name(self, store_id, new_name):
+        """修改店铺名称"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('UPDATE stores SET store_name = ? WHERE id = ?', (new_name, store_id))
+            self.conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            # 店铺名称已存在
+            return False
+        except Exception as e:
+            print(f"修改店铺名称失败: {e}")
+            return False
 
     def save_global_settings(self, daily_orders, daily_sales, refund_budget):
         """保存全局设置（全部店铺）"""
@@ -980,14 +1005,147 @@ class RefundManager(QMainWindow):
         store_label = QLabel("店铺：")
         store_label.setStyleSheet("margin-right: 2px; padding: 0px; font-size: 14px;")
         input_layout.addWidget(store_label, 0, 0)
+        
+        # 店铺选择区域 - 使用水平布局包含下拉框和操作按钮
+        store_widget = QWidget()
+        store_layout = QHBoxLayout(store_widget)
+        store_layout.setContentsMargins(0, 0, 0, 0)
+        store_layout.setSpacing(5)
+        
+        # 美化后的店铺下拉框
         self.store_combo = QComboBox()
-        self.store_combo.setStyleSheet("margin-left: 0px; font-size: 14px;")
+        self.store_combo.setStyleSheet("""
+            QComboBox {
+                font-size: 16px;
+                font-weight: bold;
+                padding: 8px 12px;
+                border: 2px solid #4CAF50;
+                border-radius: 6px;
+                background-color: white;
+                min-height: 35px;
+                min-width: 200px;
+            }
+            QComboBox:hover {
+                border-color: #45a049;
+                background-color: #f8fff8;
+            }
+            QComboBox:focus {
+                border-color: #2196F3;
+                background-color: #f0f8ff;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 30px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 8px solid #666;
+                width: 0;
+                height: 0;
+            }
+            QComboBox QAbstractItemView {
+                font-size: 14px;
+                border: 2px solid #4CAF50;
+                border-radius: 6px;
+                background-color: white;
+                selection-background-color: #4CAF50;
+                selection-color: white;
+                outline: none;
+            }
+        """)
         self.store_combo.currentTextChanged.connect(self.on_store_combo_changed)  # 同步店铺选择
-        input_layout.addWidget(self.store_combo, 0, 1)
-        self.add_store_btn = QPushButton("添加店铺")
-        self.add_store_btn.setStyleSheet("margin-left: 2px; font-size: 14px; padding: 3px 8px;")
+        store_layout.addWidget(self.store_combo)
+        
+        # 添加店铺按钮
+        self.add_store_btn = QPushButton("➕")
+        self.add_store_btn.setToolTip("添加新店铺")
+        self.add_store_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 16px;
+                padding: 8px 12px;
+                border: 2px solid #2196F3;
+                border-radius: 6px;
+                background-color: #2196F3;
+                color: white;
+                min-width: 40px;
+                min-height: 35px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+                border-color: #1976D2;
+            }
+            QPushButton:pressed {
+                background-color: #0D47A1;
+            }
+        """)
         self.add_store_btn.clicked.connect(self.add_store_dialog)
-        input_layout.addWidget(self.add_store_btn, 0, 2)
+        store_layout.addWidget(self.add_store_btn)
+        
+        # 修改店铺名称按钮
+        self.edit_store_btn = QPushButton("✏️")
+        self.edit_store_btn.setToolTip("修改当前店铺名称")
+        self.edit_store_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 16px;
+                padding: 8px 12px;
+                border: 2px solid #FF9800;
+                border-radius: 6px;
+                background-color: #FF9800;
+                color: white;
+                min-width: 40px;
+                min-height: 35px;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+                border-color: #F57C00;
+            }
+            QPushButton:pressed {
+                background-color: #E65100;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                border-color: #999999;
+                color: #666666;
+            }
+        """)
+        self.edit_store_btn.clicked.connect(self.edit_store_dialog)
+        self.edit_store_btn.setEnabled(False)  # 默认禁用，选择店铺后启用
+        store_layout.addWidget(self.edit_store_btn)
+        
+        # 删除店铺按钮
+        self.delete_store_btn = QPushButton("🗑️")
+        self.delete_store_btn.setToolTip("删除当前店铺及其所有数据")
+        self.delete_store_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 16px;
+                padding: 8px 12px;
+                border: 2px solid #F44336;
+                border-radius: 6px;
+                background-color: #F44336;
+                color: white;
+                min-width: 40px;
+                min-height: 35px;
+            }
+            QPushButton:hover {
+                background-color: #D32F2F;
+                border-color: #D32F2F;
+            }
+            QPushButton:pressed {
+                background-color: #B71C1C;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                border-color: #999999;
+                color: #666666;
+            }
+        """)
+        self.delete_store_btn.clicked.connect(self.delete_store_dialog)
+        self.delete_store_btn.setEnabled(False)  # 默认禁用，选择店铺后启用
+        store_layout.addWidget(self.delete_store_btn)
+        
+        input_layout.addWidget(store_widget, 0, 1)
 
         order_label = QLabel("订单号：")
         order_label.setStyleSheet("margin-right: 2px; padding: 0px; font-size: 14px;")
@@ -1477,7 +1635,18 @@ class RefundManager(QMainWindow):
     def on_store_combo_changed(self, store_name):
         """信息录入区店铺选择变化"""
         # 不再同步到搜索筛选区，保持两个区域独立
-        pass
+        
+        # 启用/禁用编辑和删除按钮
+        if store_name and store_name != "请先添加店铺":
+            # 启用编辑和删除按钮（只有在选择真实店铺时）
+            if hasattr(self, 'edit_store_btn') and hasattr(self, 'delete_store_btn'):
+                self.edit_store_btn.setEnabled(True)
+                self.delete_store_btn.setEnabled(True)
+        else:
+            # 禁用编辑和删除按钮
+            if hasattr(self, 'edit_store_btn') and hasattr(self, 'delete_store_btn'):
+                self.edit_store_btn.setEnabled(False)
+                self.delete_store_btn.setEnabled(False)
 
     def sync_store_selection(self, store_name):
         """同步所有店铺选择框"""
@@ -2131,6 +2300,86 @@ class RefundManager(QMainWindow):
                 self.show_tooltip(f"店铺 {name} 已添加", "rgba(76, 175, 80, 0.95)", 1500)  # 绿色气泡显示1.5秒
             else:
                 QMessageBox.warning(self, "错误", f"店铺 '{name}' 已存在！")
+
+    def edit_store_dialog(self):
+        """修改店铺名称对话框"""
+        current_store = self.store_combo.currentText()
+        if not current_store or current_store == "请先添加店铺":
+            QMessageBox.warning(self, "错误", "请先选择一个店铺！")
+            return
+        
+        # 获取当前店铺ID
+        stores = self.db.get_stores()
+        store_id = None
+        for sid, sname in stores:
+            if sname == current_store:
+                store_id = sid
+                break
+        
+        if not store_id:
+            QMessageBox.warning(self, "错误", "未找到选中的店铺！")
+            return
+        
+        new_name, ok = QInputDialog.getText(self, "修改店铺名称", "新店铺名称：", text=current_store)
+        if ok and new_name.strip():
+            new_name = new_name.strip()
+            if new_name == current_store:
+                QMessageBox.information(self, "提示", "店铺名称未改变！")
+                return
+            
+            if self.db.update_store_name(store_id, new_name):
+                self.load_stores()
+                # 更新当前选择
+                index = self.store_combo.findText(new_name)
+                if index >= 0:
+                    self.store_combo.setCurrentIndex(index)
+                self.show_tooltip(f"店铺名称已修改为 {new_name}", "rgba(33, 150, 243, 0.95)", 1500)  # 蓝色气泡
+            else:
+                QMessageBox.warning(self, "错误", f"店铺名称 '{new_name}' 已存在或修改失败！")
+
+    def delete_store_dialog(self):
+        """删除店铺对话框"""
+        current_store = self.store_combo.currentText()
+        if not current_store or current_store == "请先添加店铺":
+            QMessageBox.warning(self, "错误", "请先选择一个店铺！")
+            return
+        
+        # 获取当前店铺ID
+        stores = self.db.get_stores()
+        store_id = None
+        for sid, sname in stores:
+            if sname == current_store:
+                store_id = sid
+                break
+        
+        if not store_id:
+            QMessageBox.warning(self, "错误", "未找到选中的店铺！")
+            return
+        
+        # 确认删除对话框
+        reply = QMessageBox.question(self, "确认删除", 
+                                    f"确定要删除店铺 '{current_store}' 吗？\n\n⚠️ 警告：删除后该店铺的所有退款记录也将被删除！\n此操作不可撤销！",
+                                    QMessageBox.Yes | QMessageBox.No, 
+                                    QMessageBox.No)
+        
+        if reply == QMessageBox.Yes:
+            if self.db.delete_store(store_id):
+                self.load_stores()
+                # 重置选择
+                if self.store_combo.count() > 0:
+                    self.store_combo.setCurrentIndex(0)
+                else:
+                    self.store_combo.addItem("请先添加店铺", None)
+                    self.store_combo.setCurrentIndex(0)
+                
+                # 禁用编辑和删除按钮
+                if hasattr(self, 'edit_store_btn') and hasattr(self, 'delete_store_btn'):
+                    self.edit_store_btn.setEnabled(False)
+                    self.delete_store_btn.setEnabled(False)
+                
+                self.show_tooltip(f"店铺 {current_store} 及其所有数据已删除", "rgba(244, 67, 54, 0.95)", 2000)  # 红色气泡
+            else:
+                QMessageBox.warning(self, "错误", "删除店铺失败！")
 
     def get_current_date(self):
         return datetime.now().strftime("%Y-%m-%d")
